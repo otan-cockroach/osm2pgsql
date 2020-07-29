@@ -56,7 +56,7 @@ void table_t::connect()
 {
     m_sql_conn.reset(new pg_conn_t{m_conninfo});
     //let commits happen faster by delaying when they actually occur
-    m_sql_conn->exec("SET synchronous_commit = off");
+    //m_sql_conn->exec("SET synchronous_commit = off");
 }
 
 void table_t::start(std::string const &conninfo, std::string const &table_space)
@@ -82,11 +82,15 @@ void table_t::start(std::string const &conninfo, std::string const &table_space)
     m_sql_conn->exec("DROP TABLE IF EXISTS {}_tmp"_format(m_target->name));
     m_sql_conn->exec("RESET client_min_messages");
 
+    auto m_cockroach = true;
     //making a new table
     if (!m_append) {
         //define the new table
         auto sql =
-            "CREATE UNLOGGED TABLE {} (osm_id int8,"_format(m_target->name);
+            "CREATE {}TABLE {} (osm_id int8,"_format(
+                m_cockroach ? "": "UNLOGGED ",
+                m_target->name
+              );
 
         //first with the regular columns
         for (auto const &column : m_columns) {
@@ -105,10 +109,12 @@ void table_t::start(std::string const &conninfo, std::string const &table_space)
 
         sql += "way geometry({},{}) )"_format(m_type, m_srid);
 
-        // The final tables are created with CREATE TABLE AS ... SELECT * FROM ...
-        // This means that they won't get this autovacuum setting, so it doesn't
-        // doesn't need to be RESET on these tables
-        sql += " WITH (autovacuum_enabled = off)";
+        if (!m_cockroach) {
+          // The final tables are created with CREATE TABLE AS ... SELECT * FROM ...
+          // This means that they won't get this autovacuum setting, so it doesn't
+          // doesn't need to be RESET on these tables
+          sql += " WITH (autovacuum_enabled = off)";
+        }
         //add the main table space
         sql += m_table_space;
 
@@ -177,6 +183,7 @@ void table_t::stop(bool updateable, bool enable_hstore_index,
     // make sure that all data is written to the DB before continuing
     m_copy.sync();
 
+    auto m_cockroach = true;
     if (!m_append) {
         util::timer_t timer;
 
@@ -227,7 +234,7 @@ void table_t::stop(bool updateable, bool enable_hstore_index,
 
         // Use fillfactor 100 for un-updatable imports
         m_sql_conn->exec("CREATE INDEX ON {} USING GIST (way) {} {}"_format(
-            m_target->name, (updateable ? "" : "WITH (fillfactor = 100)"),
+            m_target->name, "" ,//((updateable || !m_cockroach) ? "" : "WITH (fillfactor = 100)"),
             tablespace_clause(table_space_index)));
 
         /* slim mode needs this to be able to apply diffs */
@@ -236,7 +243,7 @@ void table_t::stop(bool updateable, bool enable_hstore_index,
             m_sql_conn->exec(
                 "CREATE INDEX ON {} USING BTREE (osm_id) {}"_format(
                     m_target->name, tablespace_clause(table_space_index)));
-            if (m_srid != "4326") {
+            if (!m_cockroach && m_srid != "4326") {
                 m_sql_conn->exec(
                     "CREATE OR REPLACE FUNCTION {}_osm2pgsql_valid()\n"
                     "RETURNS TRIGGER AS $$\n"

@@ -140,7 +140,7 @@ void table_connection_t::connect(std::string const &conninfo)
     assert(!m_db_connection);
 
     m_db_connection.reset(new pg_conn_t{conninfo});
-    m_db_connection->exec("SET synchronous_commit = off");
+    //m_db_connection->exec("SET synchronous_commit = off");
 }
 
 void table_connection_t::start(bool append)
@@ -201,6 +201,7 @@ void table_connection_t::stop(bool updateable, bool append)
 
     util::timer_t timer;
 
+    auto m_cockroach = true;
     if (table().has_geom_column()) {
         fmt::print(stderr, "Clustering table '{}' by geometry...\n",
                    table().name());
@@ -256,7 +257,7 @@ void table_connection_t::stop(bool updateable, bool append)
         m_db_connection->exec(
             "CREATE INDEX ON {} USING GIST (\"{}\") {} {}"_format(
                 table().full_name(), table().geom_column().name(),
-                (updateable ? "" : "WITH (fillfactor = 100)"),
+                ((updateable || !m_cockroach) ? "" : "WITH (fillfactor = 100)"),
                 tablespace_clause(table().index_tablespace())));
     }
 
@@ -265,7 +266,7 @@ void table_connection_t::stop(bool updateable, bool append)
                    table().name());
         m_db_connection->exec(table().build_sql_create_id_index());
 
-        if (table().srid() != 4326 && table().has_geom_column()) {
+        if (table().srid() != 4326 && table().has_geom_column() && !m_cockroach) {
             m_db_connection->exec(
                 "CREATE OR REPLACE FUNCTION {}_osm2pgsql_valid()\n"
                 "RETURNS TRIGGER AS $$\n"
